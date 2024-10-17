@@ -82,6 +82,7 @@ poetry run python -m ner_module
   
 ```py
 from ner_module import ner_predict
+# `ner_predict_old`가 기존 함수
 
 text = """더불어민주당 이재명 대표가 이른바 '성남FC 후원금 의혹' 사건과 관련해 오는 10일 검찰에 출석해 조사를 받는다. (...)"""
 

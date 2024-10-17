@@ -1,85 +1,46 @@
-
-###########################################################################################################
-"""
-ner_module.py : 추론 관련 코드.
-- 실행하는 폴더에 predict.py, label.py, kpf-bert, kpf-bert-ner 폴더가 있어야함.
-input : text (sentence)
-output : word, label, desc (predict results by kpf-bert-ner)
-"""
-###########################################################################################################
-
 import os
-import time
-from contextlib import ContextDecorator
-from typing import Generator
+from typing import List
 
+import kss
+import numpy as np
 import torch
 from tqdm import tqdm
 from transformers import (
     AutoTokenizer,
     BertForTokenClassification,
-    PreTrainedTokenizerBase,
+    PreTrainedTokenizer,
     logging,
 )
 from transformers.modeling_outputs import TokenClassifierOutput
 
 import label
+from utils import MeasureTime, WordList, chunk_text
 
 logging.set_verbosity_error()
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained("KPF/KPF-bert-ner")
+model = BertForTokenClassification.from_pretrained("KPF/KPF-bert-ner")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#############################################################################################################
-"""
+
+@MeasureTime()
+def ner_predict(text: str):
+    """
     predict(text, tokenizer, model) : 추론 함수.
     - 문장을 입력받아 model input 에 맞게 변환.
     - model에 입력 후 추론 클래스들을 output으로 반환.
     input : text (text를 tokenize한 결과물을 넣음)
     output : word, label, desc (dict형태로 토큰에 대한 결과 반환)
-"""
-###############################################################################################################
+    """
 
-tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained("KPF/KPF-bert-ner")
-model = BertForTokenClassification.from_pretrained("KPF/KPF-bert-ner")
-
-class MeasureTime(ContextDecorator):
-    def __enter__(self):
-        self.start_time = time.time()
-
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        end_time = time.time()
-        elapsed_time = end_time - self.start_time
-
-        print(f"elapsed time: {elapsed_time:.4f}초")
-
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-def chunk_text(text: str, tokenizer: PreTrainedTokenizerBase, chunk_size=512) -> Generator[list[int], None, None]:
-    tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained("KPF/KPF-bert-ner")
-    model = BertForTokenClassification.from_pretrained("KPF/KPF-bert-ner")
-
-    tokens = (
-        tokenizer(text, return_tensors="pt", truncation=False)["input_ids"]
-        .squeeze()
-        .tolist()
-    )
-    for i in range(0, len(tokens), chunk_size):
-        yield tokens[i : i + chunk_size]
-
-
-@MeasureTime()
-def ner_predict(text: str):
     text = text.replace("\n", "")
     model.to(device)
 
     decoding_ner_sentence = ""
-    word_list = []
+    word_list: List[WordList] = []
 
     for chunk in tqdm(chunk_text(text, tokenizer), desc="step1"):
         chunk_tensor = torch.tensor(chunk).unsqueeze(0).to(device)
@@ -101,9 +62,21 @@ def ner_predict(text: str):
         current_entity = ""
         entity_tokens = ""
 
-        for token_id, predicted_label in tqdm(zip(chunk, predicted_labels), desc="step2", leave=False):
-            token = tokenizer.convert_ids_to_tokens([token_id])[0]
-            token = token.replace("#", "").replace("-", " ").strip()
+        for token_id, predicted_label in tqdm(
+            np.column_stack([chunk, predicted_labels]),
+            desc="step2",
+            leave=False,  # REF: improved
+            # zip(chunk, predicted_labels), desc="step2", leave=False
+        ):
+            token_id: int
+            predicted_label: str
+
+            token = (
+                tokenizer.convert_ids_to_tokens([token_id])[0]
+                .replace("#", "")
+                .replace("-", " ")
+                .strip()
+            )
 
             if not token:
                 continue
@@ -141,14 +114,146 @@ def ner_predict(text: str):
     return word_list
 
 
-##################################################################################################################
-"""
-    추론 함수를 실행하는 메인 함수.
-"""
-####################################################################################################################
+@MeasureTime()
+def ner_predict_old(text):
+    text = text.replace("\n", "")
+    sents = kss.split_sentences(text)
+    decoding_ner_sentence = ""
+    word_list = list()
+    pred_str = list()
+
+    # text to model input
+    for idx, sent in enumerate(sents):
+
+        sent = sent.replace(" ", "-")
+        test_tokenized = tokenizer(sent, return_tensors="pt")
+
+        test_input_ids = test_tokenized["input_ids"].to(device)
+        test_attention_mask = test_tokenized["attention_mask"].to(device)
+        test_token_type_ids = test_tokenized["token_type_ids"].to(device)
+
+        inputs = {
+            "input_ids": test_input_ids,
+            "attention_mask": test_attention_mask,
+            "token_type_ids": test_token_type_ids,
+        }
+
+        if inputs["input_ids"].size()[1] > 512:
+            cnt = int(inputs["input_ids"].size()[1])
+
+            inp_np = inputs["input_ids"].cpu().numpy()
+            att_np = inputs["attention_mask"].cpu().numpy()
+            tok_np = inputs["token_type_ids"].cpu().numpy()
+
+            for i in range(cnt):
+                slice_inp = inp_np[0][(i * 512) : ((i + 1) * 512)]
+                slice_att = att_np[0][(i * 512) : ((i + 1) * 512)]
+                slice_tok = tok_np[0][(i * 512) : ((i + 1) * 512)]
+
+                slice_inp = slice_inp.reshape(1, len(slice_inp))
+                slice_att = slice_att.reshape(1, len(slice_att))
+                slice_tok = slice_tok.reshape(1, len(slice_tok))
+
+                slice_inp = torch.tensor(slice_inp)
+                slice_att = torch.tensor(slice_att)
+                slice_tok = torch.tensor(slice_tok)
+
+                slice_inp = torch.tensor(slice_inp).to(device)
+                slice_att = torch.tensor(slice_att).to(device)
+                slice_tok = torch.tensor(slice_tok).to(device)
+
+                slice_inputs = {
+                    "input_ids": slice_inp,
+                    "attention_mask": slice_att,
+                    "token_type_ids": slice_tok,
+                }
+
+                # predict
+                outputs = model(**slice_inputs)
+
+                token_predictions = outputs[0].argmax(dim=2)
+                token_prediction_list = token_predictions.squeeze(0).tolist()
+
+                pred = [label.id2label[l] for l in token_prediction_list]
+
+                pred_str = np.concatenate((pred_str, pred))
+        else:
+            # predict
+            outputs = model(**inputs)
+
+            token_predictions = outputs[0].argmax(dim=2)
+            token_prediction_list = token_predictions.squeeze(0).tolist()
+
+            pred_str = [label.id2label[l] for l in token_prediction_list]
+        tt_tokenized = tokenizer(sent).encodings[0].tokens
+
+        # decoding_ner_sentence = ""
+        is_prev_entity = False
+        prev_entity_tag = ""
+        is_there_B_before_I = False
+        _word = ""
+        # word_list = list()
+
+        # model output to text
+        for i, (token, pred) in enumerate(zip(tt_tokenized, pred_str)):
+            if i == 0 or i == len(pred_str) - 1:
+                continue
+            token = token.replace("#", "").replace("-", " ")
+
+            if token == "":
+                continue
+
+            if "B-" in pred:
+                if is_prev_entity is True:
+                    decoding_ner_sentence += ":" + prev_entity_tag + ">"
+                    word_list.append(
+                        {"word": _word, "label": prev_entity_tag, "desc": "1"}
+                    )
+                    _word = ""
+
+                if token[0] == " ":
+                    token = list(token)
+                    token[0] = " <"
+                    token = "".join(token)
+                    decoding_ner_sentence += token
+                    _word += token
+                else:
+                    decoding_ner_sentence += "<" + token
+                    _word += token
+                is_prev_entity = True
+                prev_entity_tag = pred[2:]
+                is_there_B_before_I = True
+
+            elif "I-" in pred:
+                decoding_ner_sentence += token
+                _word += token
+
+                if is_there_B_before_I is True:
+                    is_prev_entity = True
+            else:
+                if is_prev_entity is True:
+                    decoding_ner_sentence += ":" + prev_entity_tag + ">" + token
+                    is_prev_entity = False
+                    is_there_B_before_I = False
+                    word_list.append(
+                        {
+                            "word": _word,
+                            "label": prev_entity_tag,
+                            "desc": label.ner_code[prev_entity_tag],
+                        }
+                    )
+                    _word = ""
+                else:
+                    decoding_ner_sentence += token
+
+    # print("OUTPUT")
+    # print("sentence : ", decoding_ner_sentence)
+    # print("result : ", word_list)
+    return word_list
+
 
 if __name__ == "__main__":
-    
+
     text = """
     더불어민주당 이재명 대표가 이른바 '성남FC 후원금 의혹' 사건과 관련해 오는 10일 검찰에 출석해 조사를 받는다.
 
