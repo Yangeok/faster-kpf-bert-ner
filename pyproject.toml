@@ -6,12 +6,21 @@ authors = ["Yangwook Jeong <yangwookee@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = "^3.11"
 torch = "2.2.2"
 transformers = "^4.45.2"
 tqdm = "^4.66.5"
+numpy = "^1.26.4"
+kss = "^6.0.4"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+taskipy = "^1.13.0"
+pytest-benchmark = "^4.0.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.taskipy.tasks]
+test-perf = "pytest --benchmark-only"
