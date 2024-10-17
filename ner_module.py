@@ -65,8 +65,7 @@ def ner_predict(text: str):
         for token_id, predicted_label in tqdm(
             np.column_stack([chunk, predicted_labels]),
             desc="step2",
-            leave=False,  # REF: improved
-            # zip(chunk, predicted_labels), desc="step2", leave=False
+            leave=False,
         ):
             token_id: int
             predicted_label: str
