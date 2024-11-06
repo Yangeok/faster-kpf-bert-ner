@@ -1,4 +1,7 @@
 import os
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from typing import List
 
 import kss
@@ -42,7 +45,7 @@ def ner_predict(text: str):
     decoding_ner_sentence = ""
     word_list: List[WordList] = []
 
-    for chunk in tqdm(chunk_text(text, tokenizer), desc="step1"):
+    for chunk in chunk_text(text, tokenizer):
         chunk_tensor = torch.tensor(chunk).unsqueeze(0).to(device)
         attention_mask = torch.ones_like(chunk_tensor).to(device)
 
@@ -62,11 +65,7 @@ def ner_predict(text: str):
         current_entity = ""
         entity_tokens = ""
 
-        for token_id, predicted_label in tqdm(
-            np.column_stack([chunk, predicted_labels]),
-            desc="step2",
-            leave=False,
-        ):
+        for token_id, predicted_label in np.column_stack([chunk, predicted_labels]):
             token_id: int
             predicted_label: str
 
@@ -116,13 +115,13 @@ def ner_predict(text: str):
 @MeasureTime()
 def ner_predict_old(text):
     text = text.replace("\n", "")
-    sents = kss.split_sentences(text)
+    sents = kss.split_sentences(text, num_workers="auto", backend="mecab")
     decoding_ner_sentence = ""
     word_list = list()
     pred_str = list()
 
     # text to model input
-    for idx, sent in enumerate(sents):
+    for sent in tqdm(sents, desc="step1"):
 
         sent = sent.replace(" ", "-")
         test_tokenized = tokenizer(sent, return_tensors="pt")
@@ -144,7 +143,7 @@ def ner_predict_old(text):
             att_np = inputs["attention_mask"].cpu().numpy()
             tok_np = inputs["token_type_ids"].cpu().numpy()
 
-            for i in range(cnt):
+            for i in tqdm(range(cnt), desc="step2"):
                 slice_inp = inp_np[0][(i * 512) : ((i + 1) * 512)]
                 slice_att = att_np[0][(i * 512) : ((i + 1) * 512)]
                 slice_tok = tok_np[0][(i * 512) : ((i + 1) * 512)]
@@ -194,7 +193,7 @@ def ner_predict_old(text):
         # word_list = list()
 
         # model output to text
-        for i, (token, pred) in enumerate(zip(tt_tokenized, pred_str)):
+        for i, (token, pred) in tqdm(enumerate(zip(tt_tokenized, pred_str)), desc="step3", leave=False):
             if i == 0 or i == len(pred_str) - 1:
                 continue
             token = token.replace("#", "").replace("-", " ")
