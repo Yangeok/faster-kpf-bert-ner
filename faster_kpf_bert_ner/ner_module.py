@@ -16,8 +16,8 @@ from transformers import (
 )
 from transformers.modeling_outputs import TokenClassifierOutput
 
-from faster_kpf_ber_ner import label
-from faster_kpf_ber_ner.utils import MeasureTime, WordList, chunk_text
+from faster_kpf_bert_ner import label
+from faster_kpf_bert_ner.utils import MeasureTime, WordList, chunk_text
 
 logging.set_verbosity_error()
 
