@@ -4,6 +4,9 @@ version = "0.1.0"
 description = ""
 authors = ["Yangwook Jeong <yangwookee@gmail.com>"]
 readme = "README.md"
+packages = [
+  { include = "faster_kpf_bert_ner", from = "." }
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
